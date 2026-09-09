@@ -1,5 +1,5 @@
 import streamlit as st
-from services.database import create_user
+from services.database import create_user, authenticate_user
 
 
 def show_signup():
@@ -26,8 +26,17 @@ def show_signup():
             success, message = create_user(name, email, password)
 
             if success:
+                user = authenticate_user(email,password)
+
+        
+
+            if user:
                 st.success(message)
-                st.info("Your account has been created. You can now log in.")
+                st.session_state["logged_in"] = True
+                st.session_state["user_id"] = user[0]
+                st.session_state["user_name"] = user[1]
+                st.session_state["user_email"] = user[2]
+                st.switch_page("app.py")
             else:
                 st.error(message)
 

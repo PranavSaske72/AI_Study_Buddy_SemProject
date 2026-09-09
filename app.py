@@ -15,34 +15,52 @@ with st.sidebar:
 
     st.divider()
 
-    st.page_link("app.py", label="🏠 Dashboard")
+    # Check login status
+    logged_in = st.session_state.get("logged_in", False)
 
-    st.page_link(
-        "pages/study_material.py",
-        label="📚 Study Materials"
-    )
+    if logged_in:
+        # Get current user's name
+        user_name = st.session_state.get("user_name", "Student")
 
-    st.page_link(
-        "pages/chat.py",
-        label="🤖 AI Tutor"
-    )
+        st.write(f"👋 Welcome, **{user_name}**")
 
-    st.page_link(
-        "pages/quiz.py",
-        label="📝 Quiz"
-    )
+        st.divider()
 
-    st.divider()
+        st.page_link("app.py", label="🏠 Dashboard")
 
-    st.page_link(
-        "pages/login.py",
-        label="🔐 Login"
-    )
+        st.page_link(
+            "pages/study_material.py",
+            label="📚 Study Materials"
+        )
 
-    st.page_link(
-        "pages/signup.py",
-        label="📝 Sign Up"
-    )
+        st.page_link(
+            "pages/chat.py",
+            label="🤖 AI Tutor"
+        )
+
+        st.page_link(
+            "pages/quiz.py",
+            label="📝 Quiz"
+        )
+
+        st.divider()
+
+        if st.button("🚪 Logout", use_container_width=True):
+            st.session_state.clear()
+            st.switch_page("pages/login.py")
+
+    else:
+        st.divider()
+
+        st.page_link(
+            "pages/login.py",
+            label="🔐 Login"
+        )
+
+        st.page_link(
+            "pages/signup.py",
+            label="📝 Sign Up"
+        )
 
 # ---------- MAIN DASHBOARD ----------
 

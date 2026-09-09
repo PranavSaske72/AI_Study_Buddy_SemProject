@@ -29,6 +29,16 @@ def create_tables():
             password TEXT NOT NULL
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS study_materials (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            file_name TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
 
     conn.commit()
     conn.close()
@@ -85,4 +95,77 @@ def authenticate_user(email, password):
     conn.close()
 
     return user
+
+def save_study_material(user_id, file_name, file_path):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        INSERT INTO study_materials (user_id, file_name, file_path)
+        VALUES (?, ?, ?)
+        """,
+        (user_id, file_name, file_path)
+    )
+
+    conn.commit()
+    conn.close()
+
+
+def get_study_materials(user_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT id, file_name, file_path, uploaded_at
+        FROM study_materials
+        WHERE user_id = ?
+        ORDER BY uploaded_at DESC
+        """,
+        (user_id,)
+    )
+
+    materials = cursor.fetchall()
+    conn.close()
+
+    return materials
+
+def save_study_material(user_id, file_name, file_path):
+    """Save study material information."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        INSERT INTO study_materials (user_id, file_name, file_path)
+        VALUES (?, ?, ?)
+        """,
+        (user_id, file_name, file_path)
+    )
+
+    conn.commit()
+    conn.close()
+
+
+def get_study_materials(user_id):
+    """Get all study materials for a user."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT id, file_name, file_path, uploaded_at
+        FROM study_materials
+        WHERE user_id = ?
+        ORDER BY uploaded_at DESC
+        """,
+        (user_id,)
+    )
+
+    materials = cursor.fetchall()
+    conn.close()
+
+    return materials
+
 create_tables() 
