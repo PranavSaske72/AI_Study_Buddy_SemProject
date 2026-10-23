@@ -6,6 +6,13 @@ from datetime import datetime, timedelta
 import streamlit as st
 from pages.login import render_login_page
 from pages.signup import render_signup_page
+from services.database import (
+    get_dashboard_stats,
+    get_quiz_activity,
+    get_topic_distribution,
+    get_study_streak,
+    get_analytics_data
+)
 
 # ... your other imports and component definitions ...
 
@@ -39,7 +46,7 @@ APP_SUBTITLE = "Smart Study Companion"
 PAGE_ICON = "⚡"
 
 st.set_page_config(
-    page_title=f"{APP_NAME} — Laerning Assistant",
+    page_title=f"{APP_NAME} — Learning Assistant",
     page_icon=PAGE_ICON,
     layout="wide",
     initial_sidebar_state="expanded",
@@ -192,6 +199,28 @@ def inject_css():
     )
 
 
+def apply_theme():
+    theme = st.session_state.get("settings_theme", "Light")
+    if theme == "Dark":
+        st.markdown("""
+        <style>
+        .stApp { background-color: #111827 !important; color: #F9FAFB !important; }
+        section[data-testid="stSidebar"] { background-color: #1F2937 !important; border-right: 1px solid #374151 !important; }
+        section[data-testid="stSidebar"] * { color: #F9FAFB !important; }
+        section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) { background-color: #374151 !important; color: #60A5FA !important; }
+        div[data-testid="stVerticalBlockBorderWrapper"] { background-color: #1F2937 !important; border-color: #374151 !important; }
+        .kpi-card, .header-card { background-color: #1F2937 !important; border-color: #374151 !important; }
+        .kpi-value, .header-title, .panel-title { color: #F9FAFB !important; }
+        .kpi-label, .header-subtitle { color: #D1D5DB !important; }
+        .empty-state .msg { color: #F9FAFB !important; }
+        .empty-state .sub { color: #D1D5DB !important; }
+        .stTextInput input, .stTextArea textarea { background-color: #374151 !important; color: #F9FAFB !important; border-color: #4B5563 !important; }
+        div[data-baseweb="select"] > div { background-color: #374151 !important; color: #F9FAFB !important; border-color: #4B5563 !important; }
+        .stSlider label, .stCheckbox label { color: #F9FAFB !important; }
+        </style>
+        """, unsafe_allow_html=True)
+
+
 def icon_badge(icon: str, color_key: str) -> str:
     bg, fg = PALETTE[color_key]
     return f'<div class="kpi-icon" style="background:{bg}; color:{fg};">{icon}</div>'
@@ -257,7 +286,7 @@ def render_header(title: str, subtitle: str) -> str:
         )
     with col3:
         st.markdown(
-            f'<div class="goal-pill">🎯 Study Goal: {STUDY_GOAL}%</div>',
+            f'<div class="goal-pill">🎯 Study Goal: {st.session_state.get("settings_study_goal", STUDY_GOAL)}%</div>',
             unsafe_allow_html=True,
         )
     return time_range
@@ -450,31 +479,155 @@ def render_ask_doubt_page():
         doubt_text = st.text_area("What is your doubt or question?", placeholder="Type your doubt or paste problem text here...", height=120)
         uploaded_file = st.file_uploader("Upload an image or document (optional)", type=["png", "jpg", "pdf"])
         
-        if st.button("Submit Doubt", type="primary"):
-            if doubt_text.strip():
-                st.success("Doubt submitted! (Connect your LLM backend here to stream the answer)")
-            else:
-                st.warning("Please type a question before submitting.")
+    if st.button("Submit Doubt", type="primary"):
+        if doubt_text.strip():
+            from google import genai
 
+            try:
+                client = genai.Client(
+                    api_key=st.secrets["GEMINI_API_KEY"]
+                )
+
+                with st.spinner("AI is thinking..."):
+                    response = client.models.generate_content(
+                        model="gemini-3.8-flash",
+                        contents=(
+                            f"You are a helpful study tutor. "
+                            f"Subject: {topic}. "
+                            f"Explain this question simply with examples "
+                            f"where useful:\n{doubt_text}"
+                        )
+                    )
+
+                st.subheader("📘 AI Tutor's Answer")
+                st.markdown(response.text or "No answer returned.")
+
+            except Exception as e:
+                st.error(f"AI request failed: {e}")
+        else:
+            st.warning("Please type a question before submitting.")
 
 def render_quizzes_page():
     st.markdown("## 📝 Quizzes & Practice Tests")
     st.caption("Test your knowledge and retain concepts faster.")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        with st.container(border=True):
-            st.subheader("Create a Custom Quiz")
-            st.selectbox("Select Subject", ["Math", "Science", "History", "Programming"])
-            st.slider("Number of Questions", 5, 30, 10)
-            st.select_slider("Difficulty", ["Easy", "Medium", "Hard"])
-            st.button("Start Practice Quiz", type="primary")
-            
-    with col2:
-        with st.container(border=True):
-            st.subheader("Active Quizzes")
-            st.info("No active tests right now. Start a new quiz from the left panel.")
 
+    with st.container(border=True):
+        st.subheader("Create a Custom Quiz")
+
+        subject = st.selectbox(
+            "Select Subject",
+            ["Mathematics", "Science", "History", "Programming"]
+        )
+        count = st.slider("Number of Questions", 5, 30, 5)
+        difficulty = st.select_slider(
+            "Difficulty", ["Easy", "Medium", "Hard"]
+        )
+
+        if st.button("Start Practice Quiz", type="primary"):
+            from google import genai
+            import json
+
+            try:
+                client = genai.Client(
+                    api_key=st.secrets["GEMINI_API_KEY"]
+                )
+
+                prompt = f"""
+                Create exactly {count} multiple-choice questions for
+                {subject} at {difficulty} difficulty.
+                Return ONLY a valid JSON array. Each item must have:
+                question, options (exactly 4 strings), answer
+                (exactly one option copied from options).
+                """
+
+                with st.spinner("Generating your quiz..."):
+                    response = client.models.generate_content(
+                        model="gemini-3.8-flash",
+                        contents=prompt
+                    )
+
+                questions = json.loads(response.text)
+
+                if not isinstance(questions, list) or not questions:
+                    st.error("AI returned an invalid quiz. Please retry.")
+                    return
+
+                st.session_state["practice_questions"] = questions
+                st.session_state["practice_answers"] = {}
+                st.session_state["practice_submitted"] = False
+                st.rerun()
+
+            except Exception as e:
+                st.error(f"Quiz generation failed: {e}")
+
+    questions = st.session_state.get("practice_questions", [])
+
+    if questions:
+        st.divider()
+        st.subheader("📘 Your Practice Quiz")
+
+        if not st.session_state.get("practice_submitted", False):
+            with st.form("practice_quiz_form"):
+                for i, q in enumerate(questions):
+                    st.markdown(f"**Q{i + 1}. {q['question']}**")
+                    st.radio(
+                        "Choose your answer",
+                        q["options"],
+                        key=f"practice_answer_{i}",
+                        index=None
+                    )
+
+                submitted = st.form_submit_button("Submit Answers")
+
+            if submitted:
+                st.session_state["practice_submitted"] = True
+                st.rerun()
+
+        else:
+            score = 0
+            for i, q in enumerate(questions):
+                chosen = st.session_state.get(f"practice_answer_{i}")
+                if chosen == q["answer"]:
+                    score += 1
+
+                st.markdown(f"**Q{i + 1}. {q['question']}**")
+                st.write(f"Your answer: {chosen or 'Not answered'}")
+                st.write(f"Correct answer: {q['answer']}")
+
+            st.success(f"Your score: {score}/{len(questions)}")
+            st.write("Debug user ID:", st.session_state.get("user_id"))
+            if st.session_state.get("user_id") is not None:
+                try:
+                    from services.database import create_quiz, save_quiz_attempt
+
+                    quiz_id = create_quiz(
+                        st.session_state["user_id"],
+                        "AI Practice Quiz",
+                        subject
+                    )
+
+                    save_quiz_attempt(
+                        st.session_state["user_id"],
+                        quiz_id,
+                        score,
+                        len(questions)
+                    )
+
+                    st.caption("Quiz result saved successfully.")
+
+                except Exception as e:
+                    st.warning(f"Could not save result: {e}")
+
+            if st.button("Create Another Quiz"):
+                for key in list(st.session_state.keys()):
+                    if key.startswith("practice_answer_"):
+                        del st.session_state[key]
+
+                st.session_state.pop("practice_questions", None)
+                st.session_state.pop("practice_answers", None)
+                st.session_state.pop("practice_submitted", None)
+                st.rerun()
+  
 
 def render_revision_page():
     st.markdown("## 📘 Revision Mode")
@@ -487,38 +640,72 @@ def render_revision_page():
         st.button("Next Flashcard")
 
 
-def render_analytics_page(df: pd.DataFrame):
-    time_range = render_header("Learning Analytics", "Deep dive into your performance patterns")
-    filtered_df = filter_by_range(df, time_range)
+def render_analytics_page(df: pd.DataFrame = None):
+    time_range = render_header(
+        "Learning Analytics",
+        "Deep dive into your performance patterns"
+    )
+
+    user_id = st.session_state.get("user_id")
+
+    if user_id is None:
+        st.warning("Please log in to view your analytics.")
+        return
+
+    rows = get_analytics_data(user_id)
+    analytics_df = pd.DataFrame(
+        rows,
+        columns=["date", "duration_minutes", "score", "topic"]
+    )
+
+    if not analytics_df.empty:
+        analytics_df["date"] = pd.to_datetime(
+            analytics_df["date"]
+        ).dt.date
+
+    filtered_df = filter_by_range(analytics_df, time_range)
+
     stats = compute_stats(filtered_df)
 
-    tab1, tab2, tab3 = st.tabs(
-        [
-            "📊 Overview", 
-            f"⚠️ Weak Points ({0 if filtered_df.empty else len(filtered_df.groupby('topic')['score'].mean()[lambda s: s < 70])})", 
-            "📅 Reports"
-        ]
-    )
+    # Use actual activity records for study time and streak.
+    dashboard_stats = get_dashboard_stats(user_id)
+    stats["study_minutes"] = dashboard_stats["study_minutes"]
+    stats["day_streak"] = dashboard_stats["day_streak"]
+
+    tab1, tab2, tab3 = st.tabs([
+        "📊 Overview",
+        f"⚠️ Weak Points ({0 if filtered_df.empty else len(filtered_df.groupby('topic')['score'].mean()[lambda s: s < 70])})",
+        "📅 Reports"
+    ])
 
     with tab1:
         render_kpi_cards(stats)
         st.markdown("")
         c_left, c_right = st.columns([2, 1])
+
         with c_left:
             render_quiz_activity(filtered_df)
+
         with c_right:
-            render_topic_distribution(filtered_df, stats["avg_score"])
+            render_topic_distribution(
+                filtered_df, stats["avg_score"]
+            )
+
     with tab2:
         render_weak_points(filtered_df)
+
     with tab3:
         render_reports(filtered_df)
-
 
 # ----------------------------------------------------------------------------
 # App Entry Point & Page Router
 # ----------------------------------------------------------------------------
 def main():
+    if "settings_theme" not in st.session_state:
+        st.session_state.settings_theme = "Light"
+
     inject_css()
+    apply_theme()
     selected_page, demo_mode = render_sidebar()
 
     # Load data source
@@ -538,8 +725,46 @@ def main():
     elif selected_page == "Analytics":
         render_analytics_page(df_all)
     elif selected_page == "Settings":
+
         st.markdown("## ⚙️ Settings")
-        st.write("Customize your platform preferences and profile.")
+        st.caption("Customize your StudyHub AI preferences and profile.")
+
+        st.markdown("### 👤 Profile")
+        with st.container(border=True):
+            name = st.text_input("Your Name", value="Arshiya", key="settings_name")
+            email = st.text_input("Email", value="", key="settings_email")
+            if st.button("Save Profile", type="primary", key="save_profile"):
+                st.success("Profile updated successfully! ✅")
+
+        st.markdown("")
+
+        st.markdown("### 📚 Study Preferences")
+        with st.container(border=True):
+            study_goal = st.slider("Daily Study Goal (%)", 10, 100, 90, key="settings_study_goal")
+            difficulty = st.selectbox("Default Quiz Difficulty", ["Easy", "Medium", "Hard"], key="settings_difficulty")
+            subject = st.selectbox("Favorite Subject", ["Mathematics", "Programming", "Science", "History", "English"], key="settings_subject")
+
+        st.markdown("")
+
+        st.markdown("### 🔔 Notifications")
+        with st.container(border=True):
+            notifications = st.checkbox("Enable study reminders", value=True, key="settings_notifications")
+            quiz_notifications = st.checkbox("Notify me about quiz results", value=True, key="settings_quiz_notifications")
+
+        st.markdown("")
+
+        st.markdown("### 🎨 Appearance")
+        with st.container(border=True):
+            theme = st.selectbox("Choose Theme", ["Light", "Dark"], key="settings_theme")
+            if theme == "Dark":
+                st.info("🌙 Dark Theme is enabled.")
+            else:
+                st.info("☀️ Light Theme is enabled.")
+
+        st.markdown("")
+
+        if st.button("💾 Save All Settings", type="primary", use_container_width=True, key="save_all_settings"):
+            st.success("All settings saved successfully! ✅")
     else:
         st.warning("Page not found.")
 
