@@ -211,6 +211,20 @@ def create_tables():
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_settings (
+            user_id INTEGER PRIMARY KEY,
+            study_goal INTEGER DEFAULT 90,
+            difficulty TEXT DEFAULT 'Medium',
+            favorite_subject TEXT DEFAULT 'Mathematics',
+            notifications INTEGER DEFAULT 1,
+            quiz_notifications INTEGER DEFAULT 1,
+            theme TEXT DEFAULT 'Light',
+            ai_model TEXT DEFAULT 'gemini-3.5-flash-lite',
+            ai_tone TEXT DEFAULT 'Friendly & Clear',
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -221,7 +235,7 @@ def hash_password(password):
 
 
 def create_user(name, email, password):
-    """Create a new user account."""
+    """Create a new user account. Returns (success, user_id, message)."""
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -236,11 +250,12 @@ def create_user(name, email, password):
             (name, email, hashed_password)
         )
 
+        user_id = cursor.lastrowid
         conn.commit()
-        return True, "Account created successfully."
+        return True, user_id, "Account created successfully."
 
     except sqlite3.IntegrityError:
-        return False, "An account with this email already exists."
+        return False, None, "An account with this email already exists."
 
     finally:
         conn.close()
@@ -267,40 +282,157 @@ def authenticate_user(email, password):
 
     return user
 
-def save_study_material(user_id, file_name, file_path):
+
+def get_user_by_id(user_id):
+    """Fetch user by id."""
     conn = get_connection()
     cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        INSERT INTO study_materials (user_id, file_name, file_path)
-        VALUES (?, ?, ?)
-        """,
-        (user_id, file_name, file_path)
-    )
-
-    conn.commit()
+    cursor.execute("SELECT id, name, email FROM users WHERE id = ?", (user_id,))
+    row = cursor.fetchone()
     conn.close()
+    if row:
+        return {"id": row[0], "name": row[1], "email": row[2]}
+    return None
 
 
-def get_study_materials(user_id):
+def update_user_profile(user_id, name, email):
+    """Update user's name and email."""
     conn = get_connection()
     cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "UPDATE users SET name = ?, email = ? WHERE id = ?",
+            (name, email, user_id)
+        )
+        conn.commit()
+        return True, "Profile updated successfully."
+    except sqlite3.IntegrityError:
+        return False, "This email is already in use by another account."
+    finally:
+        conn.close()
 
-    cursor.execute(
-        """
-        SELECT id, file_name, file_path, uploaded_at
-        FROM study_materials
-        WHERE user_id = ?
-        ORDER BY uploaded_at DESC
-        """,
-        (user_id,)
-    )
 
-    materials = cursor.fetchall()
-    conn.close()
+def update_user_password(user_id, old_password, new_password):
+    """Update password after verifying old password."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT password FROM users WHERE id = ?", (user_id,))
+        row = cursor.fetchone()
+        if not row:
+            return False, "User not found."
+        
+        if row[0] != hash_password(old_password):
+            return False, "Current password is incorrect."
+        
+        cursor.execute(
+            "UPDATE users SET password = ? WHERE id = ?",
+            (hash_password(new_password), user_id)
+        )
+        conn.commit()
+        return True, "Password changed successfully."
+    finally:
+        conn.close()
 
-    return materials
+
+def get_user_settings(user_id):
+    """Retrieve user settings dictionary."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT study_goal, difficulty, favorite_subject, notifications, quiz_notifications, theme, ai_model, ai_tone
+            FROM user_settings WHERE user_id = ?
+            """,
+            (user_id,)
+        )
+        row = cursor.fetchone()
+        if row:
+            return {
+                "study_goal": row[0],
+                "difficulty": row[1],
+                "favorite_subject": row[2],
+                "notifications": bool(row[3]),
+                "quiz_notifications": bool(row[4]),
+                "theme": row[5],
+                "ai_model": row[6],
+                "ai_tone": row[7]
+            }
+        else:
+            return {
+                "study_goal": 90,
+                "difficulty": "Medium",
+                "favorite_subject": "Mathematics",
+                "notifications": True,
+                "quiz_notifications": True,
+                "theme": "Light",
+                "ai_model": "gemini-3.5-flash-lite",
+                "ai_tone": "Friendly & Clear"
+            }
+    finally:
+        conn.close()
+
+
+def save_user_settings(user_id, settings):
+    """Save or update user settings dictionary."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            INSERT INTO user_settings (user_id, study_goal, difficulty, favorite_subject, notifications, quiz_notifications, theme, ai_model, ai_tone)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                study_goal=excluded.study_goal,
+                difficulty=excluded.difficulty,
+                favorite_subject=excluded.favorite_subject,
+                notifications=excluded.notifications,
+                quiz_notifications=excluded.quiz_notifications,
+                theme=excluded.theme,
+                ai_model=excluded.ai_model,
+                ai_tone=excluded.ai_tone
+            """,
+            (
+                user_id,
+                settings.get("study_goal", 90),
+                settings.get("difficulty", "Medium"),
+                settings.get("favorite_subject", "Mathematics"),
+                1 if settings.get("notifications", True) else 0,
+                1 if settings.get("quiz_notifications", True) else 0,
+                settings.get("theme", "Light"),
+                settings.get("ai_model", "gemini-3.8-flash"),
+                settings.get("ai_tone", "Friendly & Clear")
+            )
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def get_or_create_dev_user():
+    """Ensure a default dev account exists and return its (id, name, email)."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT id, name, email FROM users WHERE email = 'alex@studyhub.ai'")
+        row = cursor.fetchone()
+        if row:
+            return row[0], row[1], row[2]
+        
+        # Create a default user if none exists
+        pwd_hash = hash_password("student123")
+        cursor.execute(
+            "INSERT INTO users (name, email, password) VALUES (?, ?, ?)",
+            ("Alex Morgan", "alex@studyhub.ai", pwd_hash)
+        )
+        user_id = cursor.lastrowid
+        conn.commit()
+        return user_id, "Alex Morgan", "alex@studyhub.ai"
+    finally:
+        conn.close()
+
 
 def save_study_material(user_id, file_name, file_path):
     """Save study material information."""
@@ -338,6 +470,33 @@ def get_study_materials(user_id):
     conn.close()
 
     return materials
+
+
+def delete_study_material(material_id, user_id):
+    """Delete a study material entry for a user and remove its local file."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT file_path FROM study_materials WHERE id = ? AND user_id = ?", (material_id, user_id))
+        row = cursor.fetchone()
+        if row and row[0]:
+            try:
+                p = Path(row[0])
+                if p.exists():
+                    p.unlink(missing_ok=True)
+                txt_p = Path(f"{row[0]}.txt")
+                if txt_p.exists():
+                    txt_p.unlink(missing_ok=True)
+            except Exception:
+                pass
+        cursor.execute("DELETE FROM study_materials WHERE id = ? AND user_id = ?", (material_id, user_id))
+        conn.commit()
+        return True
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
 
 def get_dashboard_stats(user_id):
     conn = get_connection()
